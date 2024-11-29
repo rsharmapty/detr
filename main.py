@@ -16,6 +16,22 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
 
+import wandb
+import random
+
+# start a new wandb run to track this script
+wandb.init(
+    # set the wandb project where this run will be logged
+    project="detr_big_machine",
+
+    # track hyperparameters and run metadata
+    config={
+    "learning_rate": 0.0001,
+    "architecture": "Detr",
+    "dataset": "22sept2024",
+    "epochs": "350"
+    }
+)
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
@@ -174,8 +190,8 @@ def main(args):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.resume, map_location='cpu', check_hash=True)
         else:
-            checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
+            checkpoint = torch.load(args.resume, map_location='cpu', weights_only=True)
+        model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
@@ -184,6 +200,12 @@ def main(args):
     if args.eval:
         test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
                                               data_loader_val, base_ds, device, args.output_dir)
+
+        teststats = {**{f'test_{k}': v for k, v in test_stats.items()},
+                     'epoch': epoch,
+                     'n_parameters': n_parameters}
+        wandb.log(teststats)
+
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
@@ -234,7 +256,9 @@ def main(args):
                     for name in filenames:
                         torch.save(coco_evaluator.coco_eval["bbox"].eval,
                                    output_dir / "eval" / name)
-
+            # log metrics to wandb
+            wandb.log(log_stats)
+            wandb.login(coco_evaluator.coco_eval)
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
